@@ -50,7 +50,8 @@
       tagCloseIcon: '×',
       tagClass: '',
       validator: null,
-      onlyTagList: false
+      onlyTagList: false,
+      editable: true
     };
 
     var TypeaheadOverrides = (function () {
@@ -102,22 +103,26 @@
 
     if ($.isFunction(tagManagerOptions.validator)) obj.data('validator', tagManagerOptions.validator);
 
+    if (!tagManagerOptions.editable) {
+      obj.hide()
+    }
+
     var setupTypeahead = function () {
       if (!obj.typeahead) return;
 
       var taOpts = tagManagerOptions.typeaheadDelegate;
 
-      if (tagManagerOptions.typeaheadSource !== null && $.isFunction(tagManagerOptions.typeaheadSource)) {
+      if (tagManagerOptions.typeaheadSource != null && $.isFunction(tagManagerOptions.typeaheadSource)) {
         $.extend(taOpts, { source: tagManagerOptions.typeaheadSource });
         obj.typeahead(taOpts);
-      } else if (tagManagerOptions.typeaheadSource !== null) {
+      } else if (tagManagerOptions.typeaheadSource != null) {
         obj.typeahead(taOpts);
         setTypeaheadSource(tagManagerOptions.typeaheadSource);
-      } else if (tagManagerOptions.typeaheadAjaxSource !== null) {
+      } else if (tagManagerOptions.typeaheadAjaxSource != null) {
         if (!tagManagerOptions.typeaheadAjaxPolling) {
           obj.typeahead(taOpts);
 
-          if (typeof (tagManagerOptions.typeaheadAjaxSource) === "string") {
+          if (typeof (tagManagerOptions.typeaheadAjaxSource) == "string") {
             $.ajax({
               cache: false,
               type: tagManagerOptions.typeaheadAjaxMethod,
@@ -271,11 +276,16 @@
       // console.log("position: " + p);
 
       if (-1 != p) {
+        var tag = tlis[p];
         $("#" + objName + "_" + tagId).remove();
         tlis.splice(p, 1);
         tlid.splice(p, 1);
         refreshHiddenTagList();
         // console.log(tlis);
+
+        if (tagManagerOptions.AjaxPush != null) {
+          $.post(tagManagerOptions.AjaxPush, $.extend({ remove: tag }, tagManagerOptions.AjaxPushParameters));
+        }
       }
 
       if (tagManagerOptions.maxTags > 0 && tlis.length < tagManagerOptions.maxTags) {
@@ -289,12 +299,12 @@
       }
     };
 
-    var pushTag = function (tag) {
+    var pushTag = function (tag, prefill) {
       tag = trimTag(tag);
 
       if (!tag || tag.length <= 0) return;
 
-      if (tagManagerOptions.typeaheadSource !== null)
+      if (tagManagerOptions.typeaheadSource != null)
       {
           var source = $.isFunction(tagManagerOptions.typeaheadSource) ?
                       tagManagerOptions.typeaheadSource() : tagManagerOptions.typeaheadSource;
@@ -341,8 +351,8 @@
         tlis.push(tag);
         tlid.push(tagId);
 
-        if (tagManagerOptions.AjaxPush !== null) {
-          $.post(tagManagerOptions.AjaxPush, $.extend({ tag: tag }, tagManagerOptions.AjaxPushParameters));
+        if (!prefill && tagManagerOptions.AjaxPush != null) {
+          $.post(tagManagerOptions.AjaxPush, $.extend({ add: tag }, tagManagerOptions.AjaxPushParameters));
         }
 
         // console.log("tagList: " + tlis);
@@ -353,11 +363,13 @@
 
         var html = '<span class="' + tagClasses() + '" id="' + newTagId + '">';
         html += '<span>' + escaped + '</span>';
-        html += '<a href="#" class="tm-tag-remove" id="' + newTagRemoveId + '" TagIdToRemove="' + tagId + '">';
-        html += tagManagerOptions.tagCloseIcon + '</a></span> ';
+        if (tagManagerOptions.editable) {
+          html += '<a href="#" class="tm-tag-remove" id="' + newTagRemoveId + '" TagIdToRemove="' + tagId + '">';
+          html += tagManagerOptions.tagCloseIcon + '</a></span> ';
+        }
         var $el = $(html);
 
-        if (tagManagerOptions.tagsContainer !== null) {
+        if (tagManagerOptions.tagsContainer != null) {
           $(tagManagerOptions.tagsContainer).append($el);
         } else {
           obj.before($el);
@@ -365,7 +377,7 @@
 
         $el.find("#" + newTagRemoveId).on("click", obj, function (e) {
           e.preventDefault();
-          var TagIdToRemove = parseInt($(this).attr("TagIdToRemove"), 10);
+          var TagIdToRemove = parseInt($(this).attr("TagIdToRemove"));
           spliceTag(TagIdToRemove, e.data);
         });
 
@@ -380,7 +392,7 @@
 
     var prefill = function (pta) {
       $.each(pta, function (key, val) {
-        pushTag(val);
+        pushTag(val, true);
       });
     };
 
@@ -392,7 +404,7 @@
     };
 
     var keyInArray = function (e, ary) {
-      return $.inArray(e.which, ary) != -1;
+      return $.inArray(e.which, ary) != -1
     };
 
     var applyDelimiter = function (e) {
@@ -428,12 +440,12 @@
       $(this).data('tagManager', true);
 
       // store instance-specific data in the DOM object
-      var tlis = [];
-      var tlid = [];
+      var tlis = new Array();
+      var tlid = new Array();
       obj.data("tlis", tlis); //list of string tags
       obj.data("tlid", tlid); //list of ID of the string tags
 
-      if (tagManagerOptions.hiddenTagListId === null) { /* if hidden input not given default activity */
+      if (tagManagerOptions.hiddenTagListId == null) { /* if hidden input not given default activity */
         var hiddenTag = $("input[name='" + tagManagerOptions.hiddenTagListName + "']");
         if (hiddenTag.length > 0) {
           hiddenTag.remove();
@@ -446,7 +458,7 @@
           obj.siblings("input[name='" + tagManagerOptions.hiddenTagListName + "']")[0]
         );
       } else {
-        obj.data("lhiddenTagList", $('#' + tagManagerOptions.hiddenTagListId));
+        obj.data("lhiddenTagList", $('#' + tagManagerOptions.hiddenTagListId))
       }
 
       if (tagManagerOptions.typeahead) {
@@ -535,20 +547,20 @@
         killEvent(e);
       });
 
-      if (tagManagerOptions.prefilled !== null) {
-        if (typeof (tagManagerOptions.prefilled) === "object") {
+      if (tagManagerOptions.prefilled != null) {
+        if (typeof (tagManagerOptions.prefilled) == "object") {
           prefill(tagManagerOptions.prefilled);
-        } else if (typeof (tagManagerOptions.prefilled) === "string") {
+        } else if (typeof (tagManagerOptions.prefilled) == "string") {
           prefill(tagManagerOptions.prefilled.split(baseDelimiter));
-        } else if (typeof (tagManagerOptions.prefilled) === "function") {
+        } else if (typeof (tagManagerOptions.prefilled) == "function") {
           prefill(tagManagerOptions.prefilled());
         }
-      } else if (tagManagerOptions.hiddenTagListId !== null) {
+      } else if (tagManagerOptions.hiddenTagListId != null) {
         prefill($('#' + tagManagerOptions.hiddenTagListId).val().split(baseDelimiter));
       }
 
       //store options state for further public method calls
       obj.data('tagManager-options', tagManagerOptions);
     });
-  };
+  }
 })(jQuery);
