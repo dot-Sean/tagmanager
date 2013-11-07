@@ -387,7 +387,7 @@
           obj.hide();
         }
       }
-      obj.val("");
+      obj.val('').trigger('cleared');
     };
 
     var prefill = function (pta) {
@@ -481,7 +481,7 @@
         obj.on('keyup', function (e) {
           if (e.which == 27) {
             // console.log('esc detected');
-            $(this).val('');
+            $(this).val('').trigger('cleared');
             killEvent(e);
           }
         });
