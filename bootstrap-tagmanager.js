@@ -50,8 +50,10 @@
       tagCloseIcon: '×',
       tagClass: '',
       validator: null,
+      onInvalid: null,
       onlyTagList: false,
-      editable: true
+      editable: true,
+      collapseWhitespace: false
     };
 
     var TypeaheadOverrides = (function () {
@@ -101,7 +103,13 @@
     var tagBaseClass = 'tm-tag';
     var inputBaseClass = 'tm-input';
 
-    if ($.isFunction(tagManagerOptions.validator)) obj.data('validator', tagManagerOptions.validator);
+    if (tagManagerOptions.validator != null) {
+        obj.data('validator', tagManagerOptions.validator);
+    }
+
+    if (tagManagerOptions.onInvalid != null) {
+        obj.data('onInvalid', tagManagerOptions.onInvalid);
+    }
 
     if (!tagManagerOptions.editable) {
       obj.hide()
@@ -158,11 +166,14 @@
         var sourceAjaxArray = [];
         sourceAjaxArray.length = 0;
         $.each(data.tags, function (key, val) {
-          sourceAjaxArray.push(val.tag);
-          if (isSetTypeaheadSource) {
-            setTypeaheadSource(sourceAjaxArray);
+          if (obj.data('tlis').indexOf(val.tag) === -1) {
+            sourceAjaxArray.push(val.tag);
           }
         });
+
+        if (isSetTypeaheadSource) {
+          setTypeaheadSource(sourceAjaxArray);
+        }
 
         if ($.isFunction(process)) {
           process(sourceAjaxArray);
@@ -219,6 +230,11 @@
 
     var trimTag = function (tag) {
       tag = $.trim(tag);
+
+      if (tagManagerOptions.collapseWhitespace) {
+        tag = tag.replace(/\s+/, " ");
+      }
+
       // truncate at the first delimiter char
       var i = 0;
       for (i; i < tag.length; i++) {
@@ -318,7 +334,11 @@
       }
 
       // call the validator (if any) and do not let the tag pass if invalid
-      if (obj.data('validator') && !obj.data('validator')(tag)) return;
+      if (!prefill && obj.data('validator') && !obj.data('validator')(tag)) {
+          if (obj.data('onInvalid'))
+                obj.data('onInvalid')(obj, tag);
+          return;
+      }
 
       var tlis = obj.data("tlis");
       var tlid = obj.data("tlid");
