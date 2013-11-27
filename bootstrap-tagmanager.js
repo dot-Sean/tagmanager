@@ -24,6 +24,12 @@
     console.log = function () { };
   }
 
+  // This is a SHARED cache of dynamic typeahead results.
+  // It contains multiple caches, keyed by the AJAX endpoint.
+  // All tag managers using the same endpoint will share the
+  // same cache from this object.
+  var typeaheadAjaxCache = {};
+
   $.fn.tagsManager = function (options,tagToManipulate) {
     var tagManagerOptions = {
       prefilled: null,
@@ -115,70 +121,140 @@
       obj.hide()
     }
 
-    var setupTypeahead = function () {
-      if (!obj.typeahead) return;
-
-      var taOpts = tagManagerOptions.typeaheadDelegate;
-
-      if (tagManagerOptions.typeaheadSource != null && $.isFunction(tagManagerOptions.typeaheadSource)) {
-        $.extend(taOpts, { source: tagManagerOptions.typeaheadSource });
-        obj.typeahead(taOpts);
-      } else if (tagManagerOptions.typeaheadSource != null) {
-        obj.typeahead(taOpts);
-        setTypeaheadSource(tagManagerOptions.typeaheadSource);
-      } else if (tagManagerOptions.typeaheadAjaxSource != null) {
-        if (!tagManagerOptions.typeaheadAjaxPolling) {
-          obj.typeahead(taOpts);
-
-          if (typeof (tagManagerOptions.typeaheadAjaxSource) == "string") {
-            $.ajax({
-              cache: false,
-              type: tagManagerOptions.typeaheadAjaxMethod,
-              contentType: "application/json",
-              dataType: "json",
-              url: tagManagerOptions.typeaheadAjaxSource,
-              data: JSON.stringify({ typeahead: "" }),
-              success: function (data) { onTypeaheadAjaxSuccess(data, true); }
-            });
-          }
-        } else if (tagManagerOptions.typeaheadAjaxPolling) {
-          $.extend(taOpts, { source: ajaxPolling });
-          obj.typeahead(taOpts);
+    // Get or create the cache for our AJAX endpoint
+    var taCache;
+    if (tagManagerOptions.typeaheadAjaxSource != null &&
+        tagManagerOptions.typeaheadAjaxPolling) {
+        taCache = typeaheadAjaxCache[tagManagerOptions.typeaheadAjaxSource];
+        if (!taCache) {
+            taCache = {
+                tags: [],         // Fresh list of all tags or empty if cache is stale
+                valid: false,     // True if cache is fresh
+                pending: false,   // True if an AJAX refresh is in progress
+                callbacks: []     // Callbacks waiting on the AJAX refresh, or
+                                  // empty if there is no pending refresh
+            };
+            typeaheadAjaxCache[tagManagerOptions.typeaheadAjaxSource] = taCache;
         }
-      }
+    }
 
-      var data = obj.data('typeahead');
-      if (data) {
-        // set the overrided handler
-        data.select = $.proxy(tagManagerOptions.typeaheadOverrides.select,
-          obj.data('typeahead'),
-          tagManagerOptions.typeaheadOverrides);
-      }
+    var setupTypeahead = function () {
+        if (!obj.typeahead) return;
+
+        var taOpts = tagManagerOptions.typeaheadDelegate;
+
+        /*
+        Set the updater function for typeahead, which is called
+        when an item is selected, and is supposed to return the
+        text to insert into the input field. Instead, we add a
+        tag and clear the input. Because we hacked typeahead to
+        start with nothing selected, item can be undefined, in
+        which case we add the current input field text as a tag.
+         */
+        $.extend(taOpts, { updater: function(item) {
+            if (item) {
+                pushTag(item);
+            } else {
+                pushTag(obj.val());
+            }
+            return "";
+        }});
+
+        /*
+        Intercept the TAB key BEFORE typeahead gets it, and check
+        if something is selected. If not, select the first item,
+        then let typeahead add it. If typeahead is not visible,
+        add whatever is in the input field.
+         */
+        obj.on('keyup', function(event) {
+            if (event.which == 9) {
+                if (typeaheadVisible()) {
+                    var ta = obj.data('typeahead');
+                    if (ta.$menu.find('.active').length == 0)
+                        ta.next();
+                }
+            }
+        });
+
+        if (tagManagerOptions.typeaheadSource != null && $.isFunction(tagManagerOptions.typeaheadSource)) {
+            $.extend(taOpts, { source: tagManagerOptions.typeaheadSource });
+            obj.typeahead(taOpts);
+        } else if (tagManagerOptions.typeaheadSource != null) {
+            obj.typeahead(taOpts);
+            setTypeaheadSource(tagManagerOptions.typeaheadSource);
+        } else if (tagManagerOptions.typeaheadAjaxSource != null) {
+            if (tagManagerOptions.typeaheadAjaxPolling) {
+                $.extend(taOpts, { source: typeaheadAjaxSource });
+                obj.typeahead(taOpts);
+            } else {
+                obj.typeahead(taOpts);
+
+                if (typeof (tagManagerOptions.typeaheadAjaxSource) == "string") {
+                    typeaheadAjax("", function (data) {
+                        onTypeaheadAjaxSuccess(data, true);
+                    });
+                }
+            }
+        }
+
+        /*
+        This, combined with all the TypeaheadOverride junk earlier,
+        seems to be some convoluted hack to change what happens when
+        a typeahead item is selected. The simple updater function
+        above accomplishes the same thing, so I have no idea what
+        the point of this code is.
+
+        var data = obj.data('typeahead');
+        if (data) {
+            // set the overrided handler
+            data.select = $.proxy(tagManagerOptions.typeaheadOverrides.select,
+                obj.data('typeahead'),
+                tagManagerOptions.typeaheadOverrides);
+        }
+        */
     };
 
     var onTypeaheadAjaxSuccess = function(data, isSetTypeaheadSource, process) {
-      // format data if it is an asp.net 3.5 response
-      if ("d" in data) {
-        data = data.d;
-      }
-
-      if (data && data.tags) {
-        var sourceAjaxArray = [];
-        sourceAjaxArray.length = 0;
-        $.each(data.tags, function (key, val) {
-          if (obj.data('tlis').indexOf(val.tag) === -1) {
-            sourceAjaxArray.push(val.tag);
-          }
-        });
-
-        if (isSetTypeaheadSource) {
-          setTypeaheadSource(sourceAjaxArray);
+        // format data if it is an asp.net 3.5 response
+        if ("d" in data) {
+            data = data.d;
         }
 
-        if ($.isFunction(process)) {
-          process(sourceAjaxArray);
+        if (data && data.tags) {
+            var allTags = [];
+            allTags.length = 0;
+
+            $.each(data.tags, function (key, val) {
+                allTags.push(val.tag);
+            });
+
+            if (isSetTypeaheadSource) {
+                // We get here if polling is not enabled,
+                // to do the one-time init of the source list.
+                setTypeaheadSource(allTags);
+
+            } else if (taCache && taCache.pending) {
+                // If we are polling, fill the cache with
+                // our results, but first check that there
+                // is a request pending. It may have been
+                // cancelled if the tags changed while the
+                // request was in progress, in which case
+                // the results are invalid.
+                taCache.tags = allTags;
+                taCache.valid = true;
+                taCache.pending = false;
+                var callbacks = taCache.callbacks;
+                taCache.callbacks = [];
+
+                $.each(callbacks, function(i, callback) {
+                    callback(allTags);
+                });
+            }
+
+            if ($.isFunction(process)) {
+                process(allTags);
+            }
         }
-      }
     };
 
     var setTypeaheadSource = function (source) {
@@ -198,17 +274,69 @@
       return $('.typeahead:visible')[0];
     };
 
-    var ajaxPolling = function (query, process) {
-      if (typeof (tagManagerOptions.typeaheadAjaxSource) == "string") {
-        $.ajax({
-          cache: false,
-          type: tagManagerOptions.typeaheadAjaxMethod,
-          contentType: "application/json",
-          dataType: "json",
-          url: tagManagerOptions.typeaheadAjaxSource,
-          data: JSON.stringify({ typeahead: query }),
-          success: function (data) { onTypeaheadAjaxSuccess(data, false, process); }
+    var selectNewTags = function(allTags, process) {
+        // Given a list of tags, filter out the
+        // ones that we already have and pass
+        // the new ones to process()
+        var existingTags = $.map(obj.data("tlis"),
+                                 function(tag) { return tag.toLowerCase(); });
+        var newTags = [];
+        $.each(allTags, function(i, tag) {
+            if (-1 === $.inArray(tag.toLowerCase(), existingTags)) {
+                newTags.push(tag);
+            }
         });
+
+        if (process) {
+            // Find the active typeahead item and deactivate it.
+            // This lets us start with no item selected.
+            process(newTags).$menu.find('.active').removeClass('active');
+        }
+
+        return newTags;
+    };
+
+    var typeaheadAjax = function(query, success) {
+        $.ajax({
+            cache: false,
+            type: tagManagerOptions.typeaheadAjaxMethod,
+            contentType: "application/json",
+            dataType: "json",
+            url: tagManagerOptions.typeaheadAjaxSource,
+            data: JSON.stringify({ typeahead: query }),
+            success: success
+        });
+    };
+
+    var typeaheadAjaxSource = function (query, process) {
+      if (taCache) {
+          if (taCache.valid) {
+              // If the cache is valid, use it immediately
+              selectNewTags(taCache.tags, process);
+          } else {
+              // Otherwise, add ourselves to the list of
+              // callbacks waiting for the next AJAX result...
+              taCache.callbacks.push(function(allTags) {
+                  selectNewTags(allTags, process)
+              });
+
+              // ...and make an AJAX request if there
+              // isn't one already in progress.
+              if (!taCache.pending) {
+                  taCache.pending = true;
+                  typeaheadAjax(query, function (data) {
+                      // We are already on the cache callback list,
+                      // so we don't need to pass a continuation here.
+                      onTypeaheadAjaxSuccess(data, false);
+                  });
+              }
+          }
+      } else if (typeof (tagManagerOptions.typeaheadAjaxSource) == "string") {
+          // This should not be reachable right now, but might
+          // be later if we ever make caching optional
+          typeaheadAjax(query, function (data) {
+              onTypeaheadAjaxSuccess(data, false, process);
+          });
       }
     };
 
@@ -252,7 +380,7 @@
         tlis.pop();
         // console.log("TagIdToRemove: " + tagId);
         $("#" + objName + "_" + tagId).remove();
-        refreshHiddenTagList();
+        onTagsChanged();
         // console.log(tlis);
       }
     };
@@ -266,20 +394,26 @@
         tlis.pop();
         // console.log("TagIdToRemove: " + tagId);
         $("#" + objName + "_" + tagId).remove();
-        refreshHiddenTagList();
+        onTagsChanged();
         // console.log(tlis);
       }
     };
 
-    var refreshHiddenTagList = function () {
-      var tlis = obj.data("tlis");
-      var lhiddenTagList = obj.data("lhiddenTagList");
+    var onTagsChanged = function () {
+        var tlis = obj.data("tlis");
 
-      obj.trigger('tags:refresh', tlis.join(baseDelimiter));
+        if (taCache) {
+            taCache.valid = false;
+            taCache.pending = false;
+            taCache.tags = [];
+        }
 
-      if (lhiddenTagList) {
-        $(lhiddenTagList).val(tlis.join(baseDelimiter)).change();
-      }
+        obj.trigger('tags:refresh', [tlis]);
+
+        var lhiddenTagList = obj.data("lhiddenTagList");
+        if (lhiddenTagList) {
+            $(lhiddenTagList).val(tlis.join(baseDelimiter)).change();
+        }
     };
 
     var spliceTag = function (tagId) {
@@ -293,10 +427,11 @@
 
       if (-1 != p) {
         var tag = tlis[p];
-        $("#" + objName + "_" + tagId).remove();
+        var el = $("#" + objName + "_" + tagId);
+        if (el) el.remove();
         tlis.splice(p, 1);
         tlid.splice(p, 1);
-        refreshHiddenTagList();
+        onTagsChanged();
         // console.log(tlis);
 
         if (tagManagerOptions.AjaxPush != null) {
@@ -313,6 +448,18 @@
       if (tagManagerOptions.AjaxPushAllTags) {
         $.post(tagManagerOptions.AjaxPush, { tags: tagstring });
       }
+    };
+
+    var getTagId = function (tag) {
+        tag = trimTag(tag);
+        var tlisLowerCase = $.map(obj.data("tlis"),
+                                  function(elem){ return elem.toLowerCase(); });
+        var i = $.inArray(tag.toLowerCase(), tlisLowerCase);
+        if (i === -1) {
+            return null;
+        } else {
+            return obj.data("tlid")[i];
+        }
     };
 
     var pushTag = function (tag, prefill) {
@@ -346,16 +493,9 @@
       // dont accept new tags beyond the defined maximum
       if (tagManagerOptions.maxTags > 0 && tlis.length >= tagManagerOptions.maxTags) return;
 
-      var alreadyInList = false;
-      var tlisLowerCase = $.map(tlis, function(elem){ return elem.toLowerCase(); });
-      var p = $.inArray(tag.toLowerCase(), tlisLowerCase);
-      if (-1 != p) {
-        // console.log("tag:" + tag + " !!already in list!!");
-        alreadyInList = true;
-      }
+      var pTagId = getTagId(tag);
 
-      if (alreadyInList) {
-        var pTagId = tlid[p];
+      if (pTagId != null) {
         $("#" + objName + "_" + pTagId).stop()
           .animate({ backgroundColor: tagManagerOptions.blinkBGColor_1 }, 100)
           .animate({ backgroundColor: tagManagerOptions.blinkBGColor_2 }, 100)
@@ -385,9 +525,10 @@
         html += '<span>' + escaped + '</span>';
         if (tagManagerOptions.editable) {
           html += '<a href="#" class="tm-tag-remove" id="' + newTagRemoveId + '" TagIdToRemove="' + tagId + '">';
-          html += tagManagerOptions.tagCloseIcon + '</a></span> ';
+          html += tagManagerOptions.tagCloseIcon + '</a>';
         }
-        var $el = $(html);
+        html += '</span> ';
+        var $el = $(html)
 
         if (tagManagerOptions.tagsContainer != null) {
           $(tagManagerOptions.tagsContainer).append($el);
@@ -401,7 +542,7 @@
           spliceTag(TagIdToRemove, e.data);
         });
 
-        refreshHiddenTagList();
+        onTagsChanged();
 
         if (tagManagerOptions.maxTags > 0 && tlis.length >= tagManagerOptions.maxTags) {
           obj.hide();
